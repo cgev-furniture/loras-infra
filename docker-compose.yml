@@ -1,0 +1,95 @@
+# LORAS Furniture — local development stack
+#
+# Prerequisites:
+#   Clone the application repositories into sub-directories:
+#     git clone https://github.com/your-org/loras-backend  ./backend
+#     git clone https://github.com/your-org/loras-frontend ./frontend
+#
+# Then copy the example env files and fill in any missing values:
+#     cp backend/.env.example backend/.env
+#     cp frontend/.env.example frontend/.env
+#
+# Start all services:
+#     docker compose up --build
+#
+# The frontend is then available at  http://localhost:5173
+# The backend API is available at    http://localhost:8080/api/v1
+
+services:
+
+  # ------------------------------------------------------------------
+  # PostgreSQL 15
+  # ------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-loras}
+      POSTGRES_USER:     ${POSTGRES_USER:-loras}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-loras_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-loras} -d ${POSTGRES_DB:-loras}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ------------------------------------------------------------------
+  # Spring Boot backend
+  # ------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Database — point to the local Postgres container
+      DB_URL:             jdbc:postgresql://db:5432/${POSTGRES_DB:-loras}
+      DB_USERNAME:        ${POSTGRES_USER:-loras}
+      DB_PASSWORD:        ${POSTGRES_PASSWORD:-loras_dev_password}
+      # Google Cloud Storage — set this to your dev bucket or leave empty to skip GCS
+      GCS_BUCKET_NAME:    ${GCS_BUCKET_NAME:-loras-media-dev}
+      # JWT — use a long random string locally; do NOT reuse production secrets
+      JWT_SECRET:         ${JWT_SECRET:-local_dev_jwt_secret_replace_with_256bit_base64_string}
+      JWT_COOKIE_DOMAIN:  localhost
+      # Mail — use Mailtrap or another dev SMTP sink locally
+      MAIL_HOST:          ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT:          ${MAIL_PORT:-587}
+      MAIL_USERNAME:      ${MAIL_USERNAME:-}
+      MAIL_PASSWORD:      ${MAIL_PASSWORD:-}
+      CONTACT_EMAIL:      ${CONTACT_EMAIL:-asryantigran@gmail.com}
+      # CORS — allow the local frontend dev server
+      ALLOWED_ORIGINS:    http://localhost:5173
+      # Flyway runs automatically on startup (enabled by default in application.properties)
+      SPRING_FLYWAY_ENABLED: "true"
+    ports:
+      - "8080:8080"
+
+  # ------------------------------------------------------------------
+  # React + Vite frontend (served via nginx in the container)
+  # ------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # nginx reverse-proxy target — reaches the backend container over the
+      # Docker internal network on port 8080
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
